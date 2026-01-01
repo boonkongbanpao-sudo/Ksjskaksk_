@@ -1,0 +1,189 @@
+import discord, asyncio, random, string, time
+from discord.ext import commands
+from discord import app_commands
+from discord.ui import View, Button, Modal, TextInput, Select
+import random, string, time
+
+TOKEN = "โทเก"
+
+OWNER_ID = ไอดีคนที่ไช้ได้
+LOG_INVITE_CHANNEL_ID = แจ้งเตือนคนเชิญ
+ANTI_ENABLED = False
+
+intents = discord.Intents.all()
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+# ---------------- LOCK OWNER ----------------
+def is_owner_id(uid): return uid == OWNER_ID
+
+@bot.check
+async def only_owner(ctx):
+    return ctx.author.id == OWNER_ID
+
+    if interaction.user.id != OWNER_ID:
+        return
+# ---------------- INVITE TRACK ----------------
+invite_cache = {}
+
+@bot.event
+async def on_ready():
+    await bot.tree.sync()
+    print(f"บอทออนไลน์ -> {bot.user}")
+
+@bot.event
+async def on_member_join(member):
+    invites_before = invite_cache.get(member.guild.id, [])
+    invites_after = await member.guild.invites()
+    invite_cache[member.guild.id] = invites_after
+
+    for inv in invites_after:
+        before = next((i for i in invites_before if i.code == inv.code), None)
+        if before and inv.uses > before.uses:
+            ch = member.guild.get_channel(LOG_INVITE_CHANNEL_ID)
+            if ch:
+                await ch.send(
+                    f"📥 **มีการเชิญคนเข้าเซิร์ฟ**\n"
+                    f"ผู้เชิญ: {inv.inviter} ({inv.inviter.id})\n"
+                    f"ผู้ถูกเชิญ: {member} ({member.id})"
+                )
+            break
+
+# ---------------- PURGE ----------------
+@bot.tree.command(name="ลบ", description="ลบข้อความ (ไม่ใส่ = ลบทั้งหมด)")
+@app_commands.describe(จำนวน="จำนวนข้อความที่จะลบ")
+async def purge(interaction: discord.Interaction, จำนวน: int | None = None):
+    if interaction.user.id != OWNER_ID:
+        return  # เงียบ ๆ คนอื่นใช้ไม่ได้
+
+    await interaction.response.defer(ephemeral=True)
+    limit = None if not จำนวน or จำนวน <= 0 else จำนวน
+    deleted = await interaction.channel.purge(limit=limit)
+    await interaction.followup.send(f"🧹 ลบไป {len(deleted)} ข้อความ", ephemeral=True)
+
+# เก็บข้อมูลยศที่กำลังเปิดให้รับ
+active_roles = {}  # message_id: {"role_id": id, "max_claim": n, "claimed": set()}
+
+# ---------------- Modal ใส่จำนวนคน ----------------
+class MaxClaimModal(Modal, title="ตั้งจำนวนคนที่จะรับยศ"):
+    max_claim = TextInput(label="จำนวนคนสูงสุด", placeholder="ใส่ตัวเลข", required=True)
+
+    def __init__(self, role_id, interaction):
+        super().__init__()
+        self.role_id = role_id
+        self.interaction = interaction
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            max_count = int(self.max_claim.value)
+        except:
+            return await interaction.response.send_message("❌ ใส่จำนวนไม่ถูกต้อง", ephemer>
+        # ส่ง Embed + ปุ่มรับยศ
+        role = interaction.guild.get_role(self.role_id)
+        if not role:
+            return await interaction.response.send_message("❌ ไม่พบยศ", ephemeral=True)
+
+        embed = discord.Embed(
+            title=f"🎖️ แจกยศ: {role.name}",
+            description=f"จำนวนคนสูงสุดที่รับได้: {max_count}",
+            color=0x00ff00
+        )
+        embed.set_footer(text="รีบมากดกันน้าอุส่าแจกทั้งทีใครไม่ทันไม่ต้องงอแงเด้อมีแจกอีกเยอะแต่นานหน่อ>
+
+        view = RoleClaimView(self.role_id, max_count)
+        msg = await interaction.channel.send(embed=embed, view=view)
+
+        # บันทึก message_id
+        active_roles[msg.id] = {"role_id": self.role_id, "max_claim": max_count, "claim>
+
+        await interaction.response.send_message("✅ สร้างปุ่มรับยศเรียบร้อย", ephemeral=True)
+
+# ---------------- View + Dropdown ----------------
+class RoleDropdown(Select):
+    def __init__(self, roles, interaction):
+        options = [discord.SelectOption(label=r.name, value=str(r.id)) for r in roles i>
+        super().__init__(placeholder="เลือกยศ", min_values=1, max_values=1, options=opti>
+        self.interaction = interaction
+
+    async def callback(self, interaction: discord.Interaction):
+        role_id = int(self.values[0])
+        await interaction.response.send_modal(MaxClaimModal(role_id, self.interaction))
+
+class RoleSelectView(View):
+    def __init__(self, guild_roles, interaction):
+        super().__init__(timeout=None)
+        self.add_item(RoleDropdown(guild_roles, interaction))
+
+# ---------------- ปุ่มรับยศ ----------------
+class RoleClaimView(View):
+    def __init__(self, role_id, max_claim):
+        super().__init__(timeout=None)
+        self.role_id = role_id
+        self.max_claim = max_claim
+
+    @discord.ui.button(label="รับยศ", style=discord.ButtonStyle.success, custom_id="clai>
+    async def claim_button(self, interaction: discord.Interaction, button: Button):
+        msg_id = interaction.message.id
+        data = active_roles.get(msg_id)
+        if not data:
+            return await interaction.response.send_message("❌ เกิดข้อผิดพลาด", ephemeral=>
+
+        if interaction.user.id in data["claimed"]:
+            return await interaction.response.send_message("❌ คุณได้รับยศไปแล้ว", ephemera>
+
+        if len(data["claimed"]) >= data["max_claim"]:
+            return await interaction.response.send_message("❌ ยศหมดแล้ว", ephemeral=Tru>
+
+        role = interaction.guild.get_role(data["role_id"])
+        if not role:
+            return await interaction.response.send_message("❌ ไม่พบยศ", ephemeral=True)
+
+        try:
+            await interaction.user.add_roles(role)
+        except discord.Forbidden:
+            return await interaction.response.send_message("❌ บอทไม่มีสิทธิ์มอบยศ", ephemer>
+
+        data["claimed"].add(interaction.user.id)
+       data["claimed"].add(interaction.user.id)
+        await interaction.response.send_me
+
+# ---------------- Command เรียก Dropdown ----------------
+@bot.tree.command(name="รับยศ", description="เลือกยศที่ต้องการให้คนอื่นกดรับ")
+async def receive_role(interaction: discord.Interaction):
+    if interaction.user.id != OWNER_ID:
+        return await interaction.response.send_message("❌ ใช้ไม่ได้", ephemeral=True)
+    guild_roles = interaction.guild.roles
+    view = RoleSelectView(guild_roles, interaction)
+    await interaction.response.send_message("เลือกยศที่จะให้คนกดรับ:", view=view, ephemeral=>
+#-----------------ต่อต้านยิงไม่ไช้ยศ------------------
+@bot.tree.command(name="ต่อต้านยิงดิส", description="เป็นการทำยิงดิสไม่ไช้ยศเป็นโมคะในเซิฟร์เรา")
+async def anti(interaction: discord.Interaction):
+    global ANTI_ENABLED
+    ANTI_ENABLED = True
+    await interaction.response.send_message(
+        "เปิดโหมดต่อต้านยิงดิสแล้ว",
+        ephemeral=True
+    )
+
+@bot.event
+async def on_message(message: discord.Message):
+    global ANTI_ENABLED
+
+    if not ANTI_ENABLED:
+        await bot.process_commands(message)
+        return
+
+    # ข้ามข้อความจากบอทตัวเอง
+    if message.author.id == bot.user.id:
+        return
+
+    # ถ้าเป็น webhook หรือบอทอื่น → ลบทิ้งเงียบๆ
+    if message.webhook_id or message.author.bot:
+        try:
+            await message.delete()
+        except:
+            pass
+        return
+
+    await bot.process_commands(message)
+
+bot.run(TOKEN)
